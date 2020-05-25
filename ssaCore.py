@@ -1,16 +1,18 @@
 import numpy as np
 import scipy.stats as stats
-import matplotlib.pyplot as plt
 import scipy.linalg as linalg
-from scipy import linalg
 
-class mySSA():
+class SSA():
     
-    def __init__(self, F):        
+    def __init__(self, F, L):        
         self.F = F
         self.N = len(F)
-
-    def ts(self, Xi):
+        self.L = L
+        self.decompose()
+        self.reconstruct()
+        
+    @staticmethod
+    def ts(Xi):
         """
         Усредняем побочные диоганали элементарной матрицы 
         и переводим в временной ряд
@@ -19,64 +21,46 @@ class mySSA():
         return np.array([Xrev.diagonal(i).mean() for i in range(-Xi.shape[0]+1, Xi.shape[1])])
 
     def getContributions(self):
-        """
-        Рассчитать относительный вклад каждого из сингулярных значений
-        """
         lambdas = np.power(self.s,2)
         norm = np.linalg.norm(self.X)
         cont = [(lambdas[i]/(norm**2)).round(4) for i in range(len(self.s))]
         cont = {i:cont[i] for i in range(len(cont)) if cont[i]>0}
         return cont
 
-    def decompose(self, L):
+    def decompose(self):
         """
-        Создаем 
+        Создание траекторной матрицы и SVD
         """
-        self.L = L    
-        self.K = self.N - L + 1
+        self.K = self.N - self.L + 1
 
         self.X = np.column_stack([self.F[i:i+self.L] for i in range(0,self.K)])
         self.d = np.linalg.matrix_rank(self.X) 
         self.U, self.s, self.V = np.linalg.svd(self.X)
         self.V = self.V.T 
-        self.Xe = np.array([self.s[i] * \
-            np.outer(self.U[:,i], self.V[:,i]) for i in range(0, self.L)])
 
         self.sContributions = self.getContributions()
         self.r = len(self.sContributions)
         self.orthonormalBase = {i:self.U[:,i] for i in range(self.r)}
-    
-        
-    def getComponents(self, p = 0.8):
-        self.components = []        
-        for i, j in zip(np.arange(self.d)[::2], np.arange(self.d)[1::2]):
-            stat = stats.pearsonr(self.ts(self.Xe[i]), self.ts(self.Xe[j]))[0]
-            if stat >= p:
-                self.components.extend((i,j))
-        if 0 not in self.components:
-            self.components.append(0)
-        if 1 not in self.components:
-            self.components.append(1)
 
-    def filterComponents(self, p = 0.0004):   
-        keys = []
-        self.components = []
-        for key in self.sContributions:
-            keys.append(key)
-        for i, j in zip(keys[0::2], keys[1::2]):
-            pers = self.sContributions[i] + self.sContributions[j]
-            if pers >= p:
-                self.components.append(i)
-                self.components.append(j)
-    
-    def reconstruct(self):
-        Xs = np.array([self.ts(self.Xe[i]) for i in self.components])
+    def reconstruct(self, comps = np.arange(10)):
+        Xs = np.array([self.ts(self.s[i] * \
+            np.outer(self.U[:,i], self.V[:,i])) for i in comps])
         self.tsRec = np.zeros(len(Xs[0]))
         for i in range(len(Xs)):
             self.tsRec += Xs[i]
+        
+    def getFilt(self):
+        return self.tsRec
+    
+    def getTrend(self):
+        self.reconstruct([0])
         return self.tsRec
 
-    def forecastPrep(self):
+    def getPeriod(self):
+        self.reconstruct(np.arange(1,10))
+        return self.tsRec
+    
+    def forecast(self, steps):
         self.verticalityCoeff = 0
         self.R = np.zeros(self.orthonormalBase[0].shape)[:-1]
         for Pi in self.orthonormalBase.values():
@@ -84,9 +68,7 @@ class mySSA():
             self.verticalityCoeff += pi**2
             self.R += pi*Pi[:-1]
         self.R = np.matrix(self.R/(1-self.verticalityCoeff))
-    
-    def forecast(self, steps):
-        self.forecastPrep()
+
         self.tsForecast = self.tsRec
         for i in range(self.N + steps):
             if i >= self.N:
